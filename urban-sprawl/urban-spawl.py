@@ -1,9 +1,10 @@
 import os
-import rasterio
 import json
+import rasterio
 from rasterio import features
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation # NOVO: Biblioteca para gerar o GIF
 from matplotlib.colors import ListedColormap
 from scipy.ndimage import distance_transform_edt, convolve
 import osmnx as ox
@@ -38,7 +39,6 @@ ficheiro_ferrovias = 'cache_ferrovias_ni.geojson'
 if os.path.exists(ficheiro_estradas) and os.path.exists(ficheiro_ferrovias):
     print("Arquivos locais encontrados! Carregando vias da memória (bypass fiona)...")
     
-    # Lemos o arquivo como texto puro e montamos o GeoDataFrame na memória
     with open(ficheiro_estradas, 'r', encoding='utf-8') as f:
         dados_estradas = json.load(f)
         estradas_reais = gpd.GeoDataFrame.from_features(dados_estradas["features"])
@@ -80,7 +80,7 @@ peso_ferrovia = 1.0 - (distancia_ferrovia / np.max(distancia_ferrovia)) if np.ma
 
 
 # -------------------------------------------------------------
-# 5. O MOTOR DO TEMPO: LAÇO DO AUTÔMATO CELULAR COM ANIMAÇÃO
+# 5. O MOTOR DO TEMPO E GERAÇÃO DO GIF (ANIMAÇÃO)
 # -------------------------------------------------------------
 print("Iniciando a simulação temporal de expansão urbana...")
 
@@ -96,20 +96,21 @@ kernel[centro, centro] = 0
 kernel_imediato = np.ones((3, 3))
 kernel_imediato[1, 1] = 0
 
-# --- PREPARAÇÃO DA ANIMAÇÃO AO VIVO ---
-cores_solo = ['black', '#e31a1c', '#33a02c', '#fdbf6f', '#1f78b4']
+# A MUDANÇA DA ESTÉTICA: Cinza no lugar do Preto
+cores_solo = ['gray', '#e31a1c', '#33a02c', '#fdbf6f', '#1f78b4']
 cmap_personalizado = ListedColormap(cores_solo)
 
-plt.ion() # Ativa o modo interativo do Matplotlib
 fig_anim, ax_anim = plt.subplots(figsize=(8, 8))
-im_anim = ax_anim.imshow(matriz_simulada, cmap=cmap_personalizado, interpolation='none')
-titulo_anim = ax_anim.set_title('Estado Inicial - Ano 2010', fontsize=16)
 ax_anim.axis('off')
-plt.tight_layout()
+frames_animacao = [] # Lista que vai guardar as "fotos" de cada ano
 
-print("Exibindo o mapa original... A simulação começa em 2 segundos.")
-plt.pause(2.0)
+# Tira a foto do Ano Base (2010)
+im = ax_anim.imshow(matriz_simulada, cmap=cmap_personalizado, animated=True, interpolation='none')
+texto_titulo = ax_anim.text(0.5, 1.02, f"Simulação CA-Markov | Ano: 2010\nFator de Crescimento: {fator_crescimento} | Visão: {tamanho_filtro}x{tamanho_filtro}", 
+                            transform=ax_anim.transAxes, ha="center", fontsize=14, fontweight='bold')
+frames_animacao.append([im, texto_titulo])
 
+# Roda o simulador
 for ano in range(1, anos_simulacao + 1):
     matriz_urbana_atual = np.where(matriz_simulada == 1, 1, 0)
     
@@ -130,17 +131,22 @@ for ano in range(1, anos_simulacao + 1):
     mascara_transicao = celulas_que_mudaram & solo_permitido & vizinhanca_forte
     matriz_simulada[mascara_transicao] = 1
     
-    # --- ATUALIZAÇÃO DA TELA (O EFEITO DE FILME) ---
-    im_anim.set_data(matriz_simulada) 
-    titulo_anim.set_text(f'Simulação de Expansão - Ano 201{ano}')
-    plt.draw() 
-    plt.pause(1.0) 
+    # Tira a foto do novo ano e adiciona ao GIF
+    im = ax_anim.imshow(matriz_simulada, cmap=cmap_personalizado, animated=True, interpolation='none')
+    texto_titulo = ax_anim.text(0.5, 1.02, f"Simulação CA-Markov | Ano: 201{ano}\nFator de Crescimento: {fator_crescimento} | Visão: {tamanho_filtro}x{tamanho_filtro}", 
+                                transform=ax_anim.transAxes, ha="center", fontsize=14, fontweight='bold')
+    frames_animacao.append([im, texto_titulo])
     
     print(f"Ano 201{ano} concluído. Novas áreas urbanizadas: {np.sum(mascara_transicao)} pixels.")
 
-print("Simulação finalizada!")
-plt.ioff() 
-plt.close(fig_anim) 
+# Renderizando o GIF e exibindo
+print("Salvando o GIF da simulação (isso pode levar alguns segundos)...")
+ani = animation.ArtistAnimation(fig_anim, frames_animacao, interval=1000, blit=False, repeat_delay=2000)
+ani.save('evolucao_urbana.gif', writer='pillow')
+print("GIF salvo com sucesso como 'evolucao_urbana.gif'!")
+
+print(">>> ABRINDO ANIMAÇÃO. Feche a janela da imagem para continuar com a validação matemática! <<<")
+plt.show(block=True) # Trava o código aqui até você fechar a janela
 
 # -------------------------------------------------------------
 # 6. VALIDAÇÃO MATEMÁTICA (Focada nos pixels de mudança real)
@@ -158,7 +164,6 @@ try:
     matriz_gabarito[np.isin(matriz_2014_bruta, [15, 21, 25, 29, 30, 39, 41])] = 3
     matriz_gabarito[np.isin(matriz_2014_bruta, [33])] = 4
 
-    # Avaliamos apenas as áreas que podiam sofrer expansão
     mascara_vulneravel = (matriz_simples == 2) | (matriz_simples == 3)
     crescimento_real = mascara_vulneravel & (matriz_gabarito == 1)
     crescimento_simulado = mascara_vulneravel & (matriz_simulada == 1)
@@ -194,7 +199,8 @@ mapa_concordancia[(matriz_gabarito == 1) & (matriz_simulada == 1)] = 1
 mapa_concordancia[(matriz_gabarito != 1) & (matriz_simulada == 1)] = 2 
 mapa_concordancia[(matriz_gabarito == 1) & (matriz_simulada != 1)] = 3 
 
-cores_erro = ['black', '#2ca02c', '#1f77b4', '#d62728'] 
+# O cinza elegante sendo aplicado nos erros também
+cores_erro = ['gray', '#2ca02c', '#1f77b4', '#d62728'] 
 cmap_erro = ListedColormap(cores_erro)
 
 fig, eixos = plt.subplots(1, 3, figsize=(18, 6))
